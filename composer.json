@@ -1,0 +1,21 @@
+{
+    "name": "kfoobar/laravel-dto",
+    "description": "Basic Data Transfer Object for Laravel",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "KFoobar",
+            "email": "david@kfoobar.se"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require": {
+        "php": ">=7.3",
+        "illuminate/support": "^5.5|^6|^7|^8|^9"
+    },
+    "autoload": {
+        "psr-4": {
+            "KFoobar\\LaravelData\\": "src/KFoobar/LaravelData/"
+        }
+    }
+}
