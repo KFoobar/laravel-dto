@@ -3,42 +3,36 @@
 namespace KFoobar\Data;
 
 use Carbon\Carbon;
+use Carbon\CarbonImmutable;
+use DateTimeInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
+use ReflectionClass;
+use ReflectionNamedType;
+use ReflectionProperty;
+use ReflectionType;
 
 abstract class DataTransferObject
 {
-    /**
-     * Constructs a new instance.
-     *
-     * @param array $data
-     */
     public function __construct(array $data = [])
     {
         $this->collectProperties($data);
     }
 
-    /**
-     * Gets the specified key.
-     *
-     * @param string $key
-     *
-     * @return mixed
-     */
-    public function __get($key)
+    public function __get(string $key): mixed
     {
-        return property_exists($this, $key)
-            ? $this->{$key}
+        if (!property_exists($this, $key)) {
+            return null;
+        }
+
+        $property = $this->getProperty($key);
+
+        return $property->isPublic() && !$property->isStatic()
+            ? $property->getValue($this)
             : null;
     }
 
-    /**
-     * Sets the specified key.
-     *
-     * @param string $key
-     * @param mixed $value
-     */
-    public function __set($key, $value)
+    public function __set(string $key, mixed $value): void
     {
         if (!property_exists($this, $key)) {
             return;
@@ -46,117 +40,80 @@ abstract class DataTransferObject
 
         $property = $this->getProperty($key);
 
-        $this->{$key} = $this->setPropertyType(
-            $property->getType()->getName(),
-            $value
-        );
+        if (!$property->isPublic() || $property->isStatic()) {
+            return;
+        }
+
+        $property->setValue($this, $this->setPropertyType($property->getType(), $value));
     }
 
-    /**
-     * Converts from model.
-     *
-     * @param \Illuminate\Database\Eloquent\Model $model
-     *
-     * @return \KFoobar\Data\DataTransferObject
-     */
-    public static function fromModel(Model $model)
+    public static function fromModel(Model $model): static
     {
         return new static($model->toArray());
     }
 
-    /**
-     * Converts from request.
-     *
-     * @param \Illuminate\Http\Request $request
-     *
-     * @return \KFoobar\Data\DataTransferObject
-     */
-    public static function fromRequest(Request $request)
+    public static function fromRequest(Request $request): static
     {
         return new static($request->all());
     }
 
-    /**
-     * Converts from array.
-     *
-     * @param array $data
-     *
-     * @return \KFoobar\Data\DataTransferObject
-     */
-    public static function fromArray(array $data = [])
+    public static function fromArray(array $data = []): static
     {
         return new static($data);
     }
 
-    /**
-     * Gets the property.
-     *
-     * @param string $name
-     *
-     * @return \ReflectionProperty
-     */
-    protected function getProperty(string $name)
+    protected function getProperty(string $name): ReflectionProperty
     {
-        return (new \ReflectionClass(static::class))
-            ->getProperty($name);
+        return (new ReflectionClass(static::class))->getProperty($name);
     }
 
-    /**
-     * Gets the properties.
-     *
-     * @return array
-     */
-    protected function getProperties()
+    protected function getProperties(): array
     {
-        return (new \ReflectionClass(static::class))
-            ->getProperties(\ReflectionProperty::IS_PUBLIC);
+        return (new ReflectionClass(static::class))->getProperties(ReflectionProperty::IS_PUBLIC);
     }
 
-    /**
-     * Collects property values from given array.
-     *
-     * @param array $data
-     */
-    protected function collectProperties(array $data = [])
+    protected function collectProperties(array $data = []): void
     {
         foreach ($this->getProperties() as $property) {
-            $propertyName = $property->getName();
-            $propertyType = $property->getType();
-            $propertyValue = $data[$propertyName] ?? null;
+            $name = $property->getName();
 
-            $this->{$propertyName} = !is_null($propertyValue) && $property->hasType()
-                ? $this->setPropertyType($propertyType->getName(), $data[$propertyName])
-                : null;
+            if ($property->isStatic() || !array_key_exists($name, $data)) {
+                continue;
+            }
+
+            $property->setValue($this, $this->setPropertyType($property->getType(), $data[$name]));
         }
     }
 
-    /**
-     * Handles type casting given typen.
-     *
-     * @param null|string $type
-     * @param mixed       $value
-     *
-     * @return mixed
-     */
-    protected function setPropertyType(?string $type, $value = null)
+    protected function setPropertyType(?ReflectionType $type, mixed $value = null): mixed
     {
-        switch ($type) {
-            case 'int':
-                return intval($value);
-            case 'float':
-                return floatval($value);
-            case 'string':
-                return strval($value);
-            case 'bool':
-                return boolval($value);
-            case 'object':
-                return (object)$value;
-            case 'bool':
-                return (array)$value;
-            case 'date':
-                return Carbon::parse($value);
-            default:
-                return $value;
+        // Reflection assignment applies PHP's native union and intersection type rules.
+        if (!$type instanceof ReflectionNamedType || $value === null) {
+            return $value;
         }
+
+        $name = $type->getName();
+
+        if (is_a($name, Carbon::class, true) || is_a($name, CarbonImmutable::class, true)) {
+            if ($value instanceof $name) {
+                return $value;
+            }
+
+            if ($value instanceof DateTimeInterface) {
+                return $name::instance($value);
+            }
+
+            return is_string($value) ? $name::parse($value) : $value;
+        }
+
+        return match ($name) {
+            'int' => (int) $value,
+            'float' => (float) $value,
+            'string' => (string) $value,
+            'bool' => (bool) $value,
+            'object' => (object) $value,
+            'array' => (array) $value,
+            default => $value,
+        };
     }
 }
